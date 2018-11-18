@@ -1,0 +1,16 @@
+{
+  "name": "alexalanguagelearn",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Vedang Naik",
+  "license": "ISC",
+  "dependencies": {
+    "alexa-sdk": "^1.0.25",
+    "uuid": "^3.3.2",
+    "wordlist-english": "^1.2.1"
+  }
+}
