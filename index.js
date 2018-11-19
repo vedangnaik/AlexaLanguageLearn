@@ -29,45 +29,46 @@ const langPollyVoices = {
 	"tr": "Filiz"
 };
 
-function validatePhrase(phrase) {
-    var words = phrase.replace(/[^\w\s]|_/g, "").replace(/\s+/g, " ").toLowerCase().split(" ");        
-    for (var word in words) {
-        if (!wordlist["english"].includes(words[word]) && !supportedLangs.includes(words[word])) {
-            return false;
-        }
-    }
-    return true;
+function validateSentence(sentence) {
+	var words = sentence.replace(/[^\w\s]|_/g, "").replace(/\s+/g, " ").toLowerCase().split(" ");
+	for (var word in words) {
+		if (!wordlist["english"].includes(words[word]) && !supportedLangs.includes(words[word])) {
+			return false;
+		}
+	}
+	return true;
 }
 
 const handlers = {
 	'LaunchRequest': function () {
 		this.emit(":ask", "Welcome to Language Learning with Alexa.");
 	},
+
+
 	'TranslateIntent': function () {
-		// Make sure that the phrase contains only English words.
-		var phrase = this.event.request.intent.slots.phrase.value;
-		if (!validatePhrase(phrase)) {
+		// Make sure that the sentence contains only English words.
+		var sentence = this.event.request.intent.slots.sentence.value;
+		if (!validateSentence(sentence)) {
 			this.emit(":tell", "Your sentence contains some words not found in international English.");
 		}
 
 		// Ensure that the language is in the list of allowed languages.
 		var language = this.event.request.intent.slots.language.value;
 		language = language.toLowerCase();
-		if (!validatePhrase(language)) {
-			console.log(language);
+		if (!validateSentence(language)) {
 			this.emit(":tell", "This language is invalid.");
 		} else if (language == "english") {
 			this.emit(":tell", "Translating from English to English is not necessary.");
 		} else if (langShortForms[language] == undefined) {
 			this.emit(":tell", "This language is not supported by this skill.");
-		}		
+		}
 
 		// 1. Send async call to Translate API.
 		new Promise((resolve, reject) => {
 			new AWS.Translate().translateText({
 				"SourceLanguageCode": "en",
 				"TargetLanguageCode": langShortForms[language],
-				"Text": phrase
+				"Text": sentence
 			}, (err, translatedText) => {
 				if (err) { reject(err); }
 				else { resolve(translatedText); }
@@ -78,18 +79,18 @@ const handlers = {
 				new AWS.DynamoDB().putItem({
 					TableName: "AlexaLanguageLearn-QuizTable",
 					Item: {
-						"phrase_id": {"S": uuidv4() },						
-						"language": {"S": language},
-						"phrase": {"S": phrase},
-						"translation": {"S": translatedText["TranslatedText"] },
-						"user": {"S": this.event.session.user.userId}
+						"allqt_sentence_id": {"S": uuidv4() },
+						"allqt_language": {"S": language},
+						"allqt_sentence": {"S": sentence},
+						"allqt_translation": {"S": translatedText["TranslatedText"] },
+						"allqt_user": {"S": this.event.session.user.userId}
 					}
 				}, function(err, data) {
 					if (err) { reject(err); }
 					else { resolve(translatedText); }
 				});
 			});
-		// 3. If DynamoDB succeeds, send the same translated text to Polly to speak. 
+		// 3. If DynamoDB succeeds, send the same translated text to Polly to speak.
 		}).then(translatedText => {
 			return new Promise((resolve, reject) => {
 				new AWS.Polly({
@@ -127,20 +128,75 @@ const handlers = {
 			this.emit(":tell", "There was a translation error.");
 		});
 	},
+
+
 	'QuizIntent': function() {
+		// Ensure that the language is valid.
 		var language = this.event.request.intent.slots.language.value;
 		language = language.toLowerCase();
-		if (!validatePhrase(language)) {
-			console.log(language);
+		if (!validateSentence(language)) {
 			this.emit(":tell", "This language is invalid.");
 		} else if (language == "english") {
-			this.emit(":tell", "Translating from English to English is not necessary.");
+			this.emit(":tell", "Quizzing you on English is not necessary.");
 		} else if (langShortForms[language] == undefined) {
 			this.emit(":tell", "This language is not supported by this skill.");
 		}
 
-				
+		// Get 
+		new Promise((resolve, reject) => {
+			new AWS.DynamoDB().scan({
+				TableName: "AlexaLanguageLearn-QuizTable",
+				FilterExpression: "allqt_language = :l and allqt_user = :u",
+				ExpressionAttributeValues: {
+					":l": {"S" : language },
+					":u": {"S": this.event.session.user.userId }
+				},
+				ReturnConsumedCapacity: "TOTAL"
+			}, function(err, results) {
+				if (err) { reject(err); }
+				else { resolve(results["Items"][Math.floor(Math.random() * results["Count"])]); }
+			});
+		}).then(randomItem => {
+			if (!this.event.request.intent.slots.answer.value) {
+				new Promise((resolve, reject) => {
+					new AWS.Polly({
+						signatureVersion: "v4",
+						region: "us-east-1"
+					}).synthesizeSpeech({
+						"Text": randomItem["allqt_translation"]["S"],
+						"OutputFormat": "mp3",
+						"VoiceId": langPollyVoices[langShortForms[randomItem["allqt_language"]["S"].toLowerCase()]]
+					}, (err, translatedSpeech) => {
+						if (err) { reject(err); }
+						else { resolve(translatedSpeech); }
+					});
+				}).then(translatedSpeech => {
+					return new Promise((resolve, reject) => {
+						if (translatedSpeech.AudioStream instanceof Buffer) {
+							new AWS.S3().upload({
+								"Bucket": "alexalanguagelearn-bucket",
+								"Key": "temp.mp3",
+								"Body": translatedSpeech.AudioStream
+							}, (err, savedFileInfo) => {
+								if (err) { reject(err); }
+								else { resolve(savedFileInfo); }
+							});
+						} else { reject(err); }
+					});
+				}).then(savedFileInfo => {
+					this.emit(":elicitSlot", "answer", "What is <audio src='" + savedFileInfo["Location"] + "'/>, in " + language + ", mean?");
+				});
+			} else {
+				if (this.event.request.intent.slots.answer.value == randomItem["allqt_sentence"]["S"]) {
+					this.emit(":tell", "Your answer was correct.");
+				} else {
+					this.emit(":tell", "Your answer was wrong.");
+				}
+			}
+		});
 	},
+
+
 	'AMAZON.HelpIntent': function () {},
 	'AMAZON.CancelIntent': function () {},
 	'AMAZON.StopIntent': function () {}
