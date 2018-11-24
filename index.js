@@ -4,30 +4,28 @@ const Alexa = require('alexa-sdk');
 const wordlist = require('wordlist-english');
 const uuidv4 = require('uuid/v4');
 
-const supportedLangs = ["chinese", "french", "german", "italian", "japanese", "portuguese", "russian", "spanish", "turkish"];
+const supportedLangs = ["chinese", "french", "german", "italian", "portuguese", "russian", "spanish", "turkish"];
 const langShortForms = {
 	"chinese": "zh",
 	"french": "fr",
 	"german": "de",
 	"italian": "it",
-	"japanese": "jp",
 	"portuguese": "pt",
 	"russian": "ru",
 	"spanish": "es",
 	"turkish": "tr"
 };
-
 const langPollyVoices = {
 	"zh": "Zhiyu",
 	"fr": "Mathieu",
 	"de": "Hans",
 	"it": "Giorgio",
-	"jp": "Takumi",
 	"pt": "Ricardo",
 	"ru": "Maxim",
 	"es": "Enrique",
 	"tr": "Filiz"
 };
+const langFacts = require("./language_facts.json");
 
 function validateSentence(sentence) {
 	var words = sentence.replace(/[^\w\s]|_/g, "").replace(/\s+/g, " ").toLowerCase().split(" ");
@@ -121,7 +119,7 @@ const handlers = {
 			});
 		// 5. If S3 filesave succeeds, play audio back to user with SSML.
 		}).then(savedFileInfo => {
-			this.emit(":tell", "<audio src='" + savedFileInfo["Location"] + "'/>");
+			this.emit(":tell", "The phrase " + sentence + " in " + language + " is: <audio src='" + savedFileInfo["Location"] + "'/>");
 		// An error in any of the above steps is logged here.
 		}).catch((err) => {
 			console.log(err);
@@ -131,34 +129,33 @@ const handlers = {
 
 
 	'QuizIntent': function() {
-		// Ensure that the language is valid.
-		var language = this.event.request.intent.slots.language.value;
-		language = language.toLowerCase();
-		if (!validateSentence(language)) {
-			this.emit(":tell", "This language is invalid.");
-		} else if (language == "english") {
-			this.emit(":tell", "Quizzing you on English is not necessary.");
-		} else if (langShortForms[language] == undefined) {
-			this.emit(":tell", "This language is not supported by this skill.");
-		}
+		if (!this.event.request.intent.slots.answer.value) {
+			var language = this.event.request.intent.slots.language.value;
+			language = language.toLowerCase();
+			if (!validateSentence(language)) {
+				this.emit(":tell", "This language is invalid.");
+			} else if (language == "english") {
+				this.emit(":tell", "Quizzing you on English is not necessary.");
+			} else if (langShortForms[language] == undefined) {
+				this.emit(":tell", "This language is not supported by this skill.");
+			}
 
-		// Get 
-		new Promise((resolve, reject) => {
-			new AWS.DynamoDB().scan({
-				TableName: "AlexaLanguageLearn-QuizTable",
-				FilterExpression: "allqt_language = :l and allqt_user = :u",
-				ExpressionAttributeValues: {
-					":l": {"S" : language },
-					":u": {"S": this.event.session.user.userId }
-				},
-				ReturnConsumedCapacity: "TOTAL"
-			}, function(err, results) {
-				if (err) { reject(err); }
-				else { resolve(results["Items"][Math.floor(Math.random() * results["Count"])]); }
-			});
-		}).then(randomItem => {
-			if (!this.event.request.intent.slots.answer.value) {
-				new Promise((resolve, reject) => {
+			new Promise((resolve, reject) => {
+				new AWS.DynamoDB().scan({
+					TableName: "AlexaLanguageLearn-QuizTable",
+					FilterExpression: "allqt_language = :l and allqt_user = :u",
+					ExpressionAttributeValues: {
+						":l": {"S" : language },
+						":u": {"S": this.event.session.user.userId }
+					},
+					ReturnConsumedCapacity: "TOTAL"
+				}, function(err, results) {
+					if (err) { reject(err); }
+					else { resolve(results["Items"][Math.floor(Math.random() * results["Count"])]); }
+				});
+			}).then(randomItem => {
+				this.attributes.randomItem = randomItem;
+				return new Promise((resolve, reject) => {
 					new AWS.Polly({
 						signatureVersion: "v4",
 						region: "us-east-1"
@@ -170,30 +167,44 @@ const handlers = {
 						if (err) { reject(err); }
 						else { resolve(translatedSpeech); }
 					});
-				}).then(translatedSpeech => {
-					return new Promise((resolve, reject) => {
-						if (translatedSpeech.AudioStream instanceof Buffer) {
-							new AWS.S3().upload({
-								"Bucket": "alexalanguagelearn-bucket",
-								"Key": "temp.mp3",
-								"Body": translatedSpeech.AudioStream
-							}, (err, savedFileInfo) => {
-								if (err) { reject(err); }
-								else { resolve(savedFileInfo); }
-							});
-						} else { reject(err); }
-					});
-				}).then(savedFileInfo => {
-					this.emit(":elicitSlot", "answer", "What is <audio src='" + savedFileInfo["Location"] + "'/>, in " + language + ", mean?");
 				});
+			}).then(translatedSpeech => {
+				return new Promise((resolve, reject) => {
+					if (translatedSpeech.AudioStream instanceof Buffer) {
+						new AWS.S3().upload({
+							"Bucket": "alexalanguagelearn-bucket",
+							"Key": "temp.mp3",
+							"Body": translatedSpeech.AudioStream
+						}, (err, savedFileInfo) => {
+							if (err) { reject(err); }
+							else { resolve(savedFileInfo); }
+						});
+					} else { reject(err); }
+				});
+			}).then(savedFileInfo => {
+				this.emit(":elicitSlot", "answer", "What is <audio src='" + savedFileInfo["Location"] + "'/>, in " + language + ", mean?");
+			});
+		} else {
+			if (this.event.request.intent.slots.answer.value == this.attributes.randomItem["allqt_sentence"]["S"]) {
+				this.emit(":tell", "Your answer is correct!");
 			} else {
-				if (this.event.request.intent.slots.answer.value == randomItem["allqt_sentence"]["S"]) {
-					this.emit(":tell", "Your answer was correct.");
-				} else {
-					this.emit(":tell", "Your answer was wrong.");
-				}
+				this.emit(":tell", "Your answer is wrong");
 			}
-		});
+		}
+	},
+
+
+	'FactIntent': function() {
+		var language = this.event.request.intent.slots.language.value;
+		language = language.toLowerCase();
+		if (language == "english") {
+			this.emit(":tell", "Quizzing you on English is not necessary.");
+		} else if (langShortForms[language] == undefined) {
+			this.emit(":tell", "This language is not supported by this skill.");
+		}
+
+		var factBank = langFacts[language];
+		this.emit(":tell", factBank[Math.floor(Math.random() * factBank.length())])
 	},
 
 
