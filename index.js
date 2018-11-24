@@ -204,7 +204,7 @@ const handlers = {
 		}
 
 		var factBank = langFacts[language];
-		this.emit(":tell", factBank[Math.floor(Math.random() * factBank.length())])
+		this.emit(":tell", factBank[Math.floor(Math.random() * factBank.length)]);
 	},
 
 
