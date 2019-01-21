@@ -79,7 +79,9 @@ function translateSentence(sentence, language, thisReference) {
 				thisReference.emit(":tell", "There was a translation error, please try again.");
 				reject(err);
 			}
-			else { resolve(translatedText); }
+			else {
+				resolve(translatedText);
+			}
 		});
 	// 2. If Translate succeeds, send translated text to QuizTable to quiz the user on later.
 	}).then(translatedText => {
@@ -93,7 +95,7 @@ function translateSentence(sentence, language, thisReference) {
 					"allqt_translation": {"S": translatedText["TranslatedText"] },
 					"allqt_user": {"S": thisReference.event.session.user.userId}
 				}
-			}, function(err, translatedText) {
+			}, (err) => {
 				if (err) {
 					thisReference.emit(":tell", "A database error occured, please try again.");
 					reject(err);
@@ -179,12 +181,8 @@ const handlers = {
 		if (!this.event.request.intent.slots.answer.value) {
 			var language = this.event.request.intent.slots.language.value;
 			language = language.toLowerCase();
-			if (!validateSentence(language)) {
-				this.emit(":tell", "This language is invalid.");
-			} else if (language == "english") {
-				this.emit(":tell", "Quizzing you on English is not necessary.");
-			} else if (langShortForms[language] == undefined) {
-				this.emit(":tell", "This language is not supported by this skill.");
+			if (!supportedLangs.includes(language)) {
+				this.emit(":tell", "You have entered an invalid or unsupported language. Please try another one.");
 			}
 
 			// Get all rows regarding the user's language from DynamoDB.
@@ -197,14 +195,15 @@ const handlers = {
 						":u": {"S": this.event.session.user.userId }
 					},
 					ReturnConsumedCapacity: "TOTAL"
-				}, function(err, results) {
-					if (err) { reject(err); }
-					// Pick a random one using some maths.
+				}, (err, results) => {
+					if (err) { reject(err); }					
 					else {
+						console.log(results);
 						if (results["Count"] == 0) {
 							this.emit(":tell", "You have never asked for any translations in this language. Please try another one.");
 						}
-						resolve(results["Items"][Math.floor(Math.random() * results["Count"])]); }
+						resolve(results["Items"][ Math.floor(Math.random() * results["Count"]) ]);
+					}
 				});
 			}).then(randomItem => {
 				this.attributes.randomItem = randomItem;
@@ -242,7 +241,7 @@ const handlers = {
 			if (this.event.request.intent.slots.answer.value == this.attributes.randomItem["allqt_sentence"]["S"]) {
 				this.emit(":tell", "Your answer is correct!");
 			} else {
-				this.emit(":tell", "Your answer is wrong");
+				this.emit(":tell", "Your answer is wrong. The correct answer is: " + this.attributes.randomItem["allqt_sentence"]["S"]);
 			}
 		}
 	},
